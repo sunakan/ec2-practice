@@ -7,7 +7,6 @@ Parameters:
     Description: プロジェクト名
     Type: String
     Default: poc-project
-
   EnvironmentShort:
     Description: 環境(proof-of-content/development/staging/production)
     Type: String
@@ -17,6 +16,8 @@ Parameters:
       - stg
       - prd
     Default: poc
+  Ec2ImageId:
+    Type: String
 
 Mappings:
   EnvironmentLong:
@@ -148,5 +149,84 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub allow-web-from-internet-for-${ProjectName}
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  Ec2InstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      RoleName: !Sub ${ProjectName}-ec2-role-${EnvironmentShort}
+      Tags:
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Ref Ec2InstanceProfileRole
+      Path: "/"
+      Roles:
+        - !Ref Ec2InstanceProfileRole
+  Ec2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${ProjectName}-ec2-template-${EnvironmentShort}
+      LaunchTemplateData:
+        BlockDeviceMappings: # Optional
+          - DeviceName: /dev/sda1
+            Ebs:
+              DeleteOnTermination: true
+              Encrypted: false
+              VolumeSize: 8
+              VolumeType: gp2
+        IamInstanceProfile:
+          Arn: !GetAtt Ec2InstanceProfile.Arn
+        ImageId: !Ref Ec2ImageId
+        InstanceType: t2.micro
+        Monitoring:
+          Enabled: false
+        UserData: # userdataのログは /var/log/cloud-init-output.log
+          Fn::Base64:
+            !Sub |
+            #!/bin/bash -xe
+            apt-get update
+            apt-get install -y jq tree awscli tmux make
+            echo '---------------------------------[ Docker ]'
+            apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+            echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt-get update
+            apt-get install -y docker-ce docker-ce-cli containerd.io
+            echo '---------------------------------[ duf ]'
+            cd /tmp && wget https://github.com/muesli/duf/releases/download/v0.6.0/duf_0.6.0_linux_x86_64.tar.gz
+            cd /tmp && (echo 2cf2e6263dcdd4809c1a9ca2ee50ce0c228c5720a1d3ddd1cae084f8fbfe1ae1  duf_0.6.0_linux_x86_64.tar.gz | sha256sum --check -) && tar -zxvf duf_0.6.0_linux_x86_64.tar.gz && mv duf /usr/local/bin/duf
+      #Tags: # Unsupported [AWS::EC2::LaunchTemplate-Tags #184](https://github.com/aws-cloudformation/aws-cloudformation-coverage-roadmap/issues/184)
+      #  - Key: Environment
+      #    Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref Ec2LaunchTemplate
+        Version: !GetAtt Ec2LaunchTemplate.LatestVersionNumber
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref SecurityGroupForWebFromInternet
+          SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-1
         - Key: Environment
           Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]

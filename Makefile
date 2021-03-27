@@ -6,13 +6,29 @@ STACK_NAME := poc-stack
 ################################################################################
 # マクロ
 ################################################################################
+define get-ubuntu-latest-image-id
+aws ec2 describe-images --owners 099720109477 --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64*" --query 'reverse(sort_by(Images, &CreationDate))[0].ImageId' --output text
+endef
+
+define get-vpc-id
+aws cloudformation describe-stack-resource --stack-name $(STACK_NAME) --logical-resource-id Vpc --query 'StackResourceDetail.PhysicalResourceId' --output text
+endef
+
+define get-default-security-group-id
+aws ec2 describe-security-groups --filters Name=vpc-id,Values=$(VPC_ID) Name=group-name,Values=default --query 'SecurityGroups[0].GroupId' --output text
+endef
+
+define get-ec2-id
+aws cloudformation describe-stack-resource --stack-name $(STACK_NAME) --logical-resource-id Ec2Instance --query 'StackResourceDetail.PhysicalResourceId' --output text
+endef
 
 ################################################################################
 # タスク
 ################################################################################
 .PHONY: up
 up: ## CFnスタックをデプロイ
-	rain deploy --yes main.yaml $(STACK_NAME)
+	$(eval IMAGE_ID := $(shell $(call get-ubuntu-latest-image-id)))
+	rain deploy --yes main.yaml $(STACK_NAME) --params Ec2ImageId=$(IMAGE_ID)
 	make remove-rules-from-default-security-group
 
 .PHONY: down
@@ -33,8 +49,8 @@ fmt: ## CFnのformat
 
 .PHONY: remove-rules-from-default-security-group
 remove-rules-from-default-security-group: ## CFnで作成したVPCのデフォルトセキュリティグループからルールの削除
-	$(eval VPC_ID := $(shell aws cloudformation describe-stack-resource --stack-name $(STACK_NAME) --logical-resource-id Vpc --query 'StackResourceDetail.PhysicalResourceId' --output text))
-	$(eval DEFAULT_SECURITY_GROUP_ID := $(shell aws ec2 describe-security-groups --filters Name=vpc-id,Values=$(VPC_ID) Name=group-name,Values=default --query 'SecurityGroups[0].GroupId' --output text))
+	$(eval VPC_ID := $(shell $(call get-vpc-id)))
+	$(eval DEFAULT_SECURITY_GROUP_ID := $(shell $(call get-default-security-group-id)))
 	aws ec2 describe-security-groups --group-id $(DEFAULT_SECURITY_GROUP_ID) \
 		| jq --raw-output --compact-output '.SecurityGroups[].IpPermissions' \
 		| awk '$$0!="[]"' \
@@ -43,6 +59,11 @@ remove-rules-from-default-security-group: ## CFnで作成したVPCのデフォ�
 		| jq --raw-output --compact-output '.SecurityGroups[].IpPermissionsEgress' \
 		| awk '$$0!="[]"' \
 		| xargs --delimiter "\n" -I {ip-permissions-egress} aws ec2 revoke-security-group-egress --group-id $(DEFAULT_SECURITY_GROUP_ID) --ip-permissions '{ip-permissions-egress}'
+
+.PHONY: ssm-session
+ssm-session: ## CFnで作成したEC2へssm session managerでつなぐ
+	$(eval EC2_ID := $(shell $(call get-ec2-id)))
+	aws ssm start-session --target $(EC2_ID)
 
 ################################################################################
 # Util-macro
