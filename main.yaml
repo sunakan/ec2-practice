@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: EC2のテンプレート
+
+Parameters:
+  ProjectName:
+    Description: プロジェクト名
+    Type: String
+    Default: poc-project
+
+  EnvironmentShort:
+    Description: 環境(proof-of-content/development/staging/production)
+    Type: String
+    AllowedValues:
+      - poc
+      - dev
+      - stg
+      - prd
+    Default: poc
+
+Mappings:
+  EnvironmentLong:
+    poc:
+      value: proof-of-content
+    dev:
+      value: development
+    stg:
+      value: staging
+    prd:
+      value: production
+
+Resources:
+  ##############################################################################
+  # Vpc
+  ##############################################################################
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      EnableDnsSupport: true # PrivateLinkを設置するのに要true
+      EnableDnsHostnames: true # PrivateLinkを設置するのに要true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  ##############################################################################
+  # Routing to internet
+  ##############################################################################
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  IgwAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref Igw
+      VpcId: !Ref Vpc
+  RouteTableForPublicSubnets:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-rt
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  RoutingToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+      RouteTableId: !Ref RouteTableForPublicSubnets
+  ##############################################################################
+  # Public sunets
+  ##############################################################################
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1a
+      CidrBlock: 10.0.0.0/24
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-subnet-1a
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  RouteTableAssociationForPublicSubnet1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref RouteTableForPublicSubnets
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1c
+      CidrBlock: 10.0.1.0/24
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-subnet-1c
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  RouteTableAssociationForPublicSubnet2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref RouteTableForPublicSubnets
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1d
+      CidrBlock: 10.0.2.0/24
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-subnet-1d
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
+  RouteTableAssociationForPublicSubnet3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref RouteTableForPublicSubnets
+  ##############################################################################
+  # Ec2 for web, you can access by ssm
+  ##############################################################################
+  SecurityGroupForWebFromInternet:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub allow-from-internet-for-${ProjectName}
+      GroupDescription: 'ex:IGW--sg--ALB,IGW--sg--EC2'
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+            - IpProtocol: tcp
+              FromPort : 80
+              ToPort : 80
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp
+              FromPort : 443
+              ToPort : 443
+              CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub allow-web-from-internet-for-${ProjectName}
+        - Key: Environment
+          Value: !FindInMap [EnvironmentLong, !Ref EnvironmentShort, value]
